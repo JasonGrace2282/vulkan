@@ -1,3 +1,4 @@
+#include <cstdint>
 #ifdef LSP_COMPLETION
   #include <vulkan/vulkan_core.h>
 #endif
@@ -84,9 +85,10 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT
 
 struct QueueFamilyIndices {
   std::optional<uint32_t> graphicsFamily;
+  std::optional<uint32_t> windowFamily;
 
   bool isComplete() {
-    return graphicsFamily.has_value();
+    return graphicsFamily.has_value() && windowFamily.has_value();
   }
 };
 
@@ -106,6 +108,7 @@ private:
   VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
   VkDevice device;
   VkQueue graphicsQueue;
+  VkSurfaceKHR surface;
 
   void initWindow() {
     if (!glfwInit()) {
@@ -122,6 +125,7 @@ private:
   void initVulkan() {
     createInstance();
     setupDebugMessenger();
+    createSurface();
     pickPhysicalDevice();
     createLogicalDevice();
   }
@@ -208,6 +212,12 @@ private:
     return VK_FALSE;
   }
 
+  void createSurface() {
+    if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create window surface!");
+    }
+  }
+
   void pickPhysicalDevice() {
     // similar to the extensions, we first find the count
     // then create the vector of physical devices
@@ -247,9 +257,16 @@ private:
 
     int i = 0;
     for (const auto &queueFamily : queueFamilies) {
+      // check if graphics is ok
       if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
         indices.graphicsFamily = i;
       }
+
+      // check if window can open
+      VkBool32 presentSupport = false;
+      vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+      if (presentSupport)
+        indices.windowFamily = i;
 
       if (indices.isComplete()) {
         break;
@@ -309,6 +326,9 @@ private:
     }
 
     vkDestroyDevice(device, nullptr);
+
+    // clean up the window
+    vkDestroySurfaceKHR(instance, surface, nullptr);
 
     // clean up instance, without any callback
     vkDestroyInstance(instance, nullptr);
