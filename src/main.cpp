@@ -150,6 +150,8 @@ private:
   VkRenderPass renderPass;
   VkPipeline graphicsPipeline;
   std::vector<VkFramebuffer> swapChainFramebuffers;
+  VkCommandPool commandPool;
+  VkCommandBuffer commandBuffer;
 
   void initWindow() {
     if (!glfwInit()) {
@@ -174,6 +176,8 @@ private:
     createRenderPass();
     createGraphicsPipeline();
     createFrameBuffers();
+    createCommandPool();
+    createCommandBuffer();
   }
 
   void createInstance() {
@@ -635,27 +639,10 @@ private:
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
-    // viewports are a transformation from an image to the framebuffer
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = (float)swapChainExtent.width;
-    viewport.height = (float)swapChainExtent.height;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-
-    // but the scissor just tells the region outside which pixels
-    // should be discarded, so it's basically a filter
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = swapChainExtent;
-
     VkPipelineViewportStateCreateInfo viewportState{};
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewportState.viewportCount = 1;
-    viewportState.pViewports = &viewport;
     viewportState.scissorCount = 1;
-    viewportState.pScissors = &scissor;
 
     // rasterizer runs before the fragment shader
     VkPipelineRasterizationStateCreateInfo rasterizer{};
@@ -772,6 +759,86 @@ private:
     }
   }
 
+  void createCommandPool() {
+    QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
+
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT; // reset every frame
+    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
+
+    if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create command pool!");
+    }
+  }
+
+  void createCommandBuffer() {
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+
+    if (vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer) != VK_SUCCESS) {
+      throw std::runtime_error("failed to allocate command buffers!");
+    }
+  }
+
+  // write commands into the buffer, using an image from the swapChain
+  void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+    // start recording a command buffer
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = 0;                  // Optional
+    beginInfo.pInheritanceInfo = nullptr; // Optional
+
+    // if already recorded, this will reset the buffer!!!
+    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+      throw std::runtime_error("failed to begin recording command buffer!");
+    }
+
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = renderPass;
+    renderPassInfo.framebuffer = swapChainFramebuffers[imageIndex];
+
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = swapChainExtent;
+
+    VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearColor;
+
+    vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+    // we set these to be dynamic and now we pay the price
+    // viewports are a transformation from an image to the framebuffer
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(swapChainExtent.width);
+    viewport.height = static_cast<float>(swapChainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+
+    // but the scissor just tells the region outside which pixels
+    // should be discarded, so it's basically a filter
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = swapChainExtent;
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+    // AND DRAW!!
+    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+    vkCmdEndRenderPass(commandBuffer);
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+      throw std::runtime_error("failed to record command buffer!");
+    }
+  }
+
   void mainLoop() {
     // add back once the rendering is ready
     // while (!glfwWindowShouldClose(window)) {
@@ -787,6 +854,8 @@ private:
     for (auto framebuffer : swapChainFramebuffers) {
       vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
+
+    vkDestroyCommandPool(device, commandPool, nullptr);
 
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
